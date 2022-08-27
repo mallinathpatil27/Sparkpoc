@@ -1,1 +1,45 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+import re
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
 
+#get data from crawlers and create_dynamic_frame
+
+db_name='sparkpoc'
+tb_name='10000records_csv'
+data='s3://mallinath12/asl/fold/10000Records.csv'
+datasource=glueContext.create_dynamic_frame.from_catalog(database=db_name,table_name=tb_name)
+df=datasource.toDF()
+
+#data cleaning 
+#remove special characters from header/schema 
+
+cols=[re.sub('[^0-9a-zA-Z]',"",c)for c in df.columns]
+ndf=df.toDF(*cols)
+
+#performing some operations
+res=ndf.withColumn("DateofBirth",to_date(col("DateofBirth"),"M/d/yyyy")).withColumn("today",current_date()).withColumn("diff",datediff(col("DateofBirth"),col("today")))
+
+# convert dataframe to gluecontext/dynamicframe 
+fres =DynamicFrame.fromDF(res, glueContext, 'results')
+
+#finally writing into s3
+s3_write_path="s3://mallinath12/output/maldata"
+glueContext.write_dynamic_frame.from_options(frame=fres, connection_type="s3", connection_options={"path": s3_write_path}, format="csv", transformation_ctx="datasink1")
+
+#this will helpfull for writing final output into mysql
+# glueContext.write_dynamic_frame.from_options(frame = fres, connection_type = "mysql" ,  connection_options = {"url": "jdbc:mysql://mysql.cht5wvg7bulc.ap-south-1.rds.amazonaws.com:3306/mysqldb", "user": "myuser", "password": "mypassword", "dbtable": "avdglue"})
+# glueContext.write_dynamic_frame.from_options(frame=fres, connection_type="s3", connection_options={"path": s3_write_path}, format="csv", transformation_ctx="datasink1")
+job.commit()
